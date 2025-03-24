@@ -23,82 +23,71 @@ import xgrammar
 
 
 class XGrammarLogitsProcessor:
-    """
-    A logits processor that constrains generation according to a grammar.
-
-    This processor uses XGrammar's GrammarMatcher to create token bitmasks that
-    constrain the model to only generate tokens that conform to the specified grammar.
-    """
-
     def __init__(
         self,
         grammar: xgrammar.CompiledGrammar,
         max_rollback_tokens: int = 16,
     ):
-        """
-        Initialize the XGrammar logits processor.
-
-        Args:
-            grammar: A compiled grammar from XGrammar
-            max_rollback_tokens: Maximum number of tokens to rollback for grammar matching
-        """
         self.matcher = xgrammar.GrammarMatcher(grammar, max_rollback_tokens=max_rollback_tokens)
         self.vocab_size = grammar.tokenizer_info.vocab_size
-        self.batch_bitmask_shape = xgrammar.get_bitmask_shape(1, self.vocab_size)
         self.bitmask = xgrammar.allocate_token_bitmask(1, self.vocab_size)
+        self.generated_the_first_token = False
 
     def __call__(self, tokens: mx.array, logits: mx.array) -> mx.array:
-        """
-        Apply the grammar constraint to the logits.
+        if not self.generated_the_first_token:
+            self.generated_the_first_token = True
+        else:
+            if not self.matcher.is_terminated():
+                self.matcher.accept_token(tokens[-1].item())
 
-        Args:
-            tokens: The tokens generated so far (mx.array)
-            logits: The logits from the model (mx.array) for the next token
+        if not self.matcher.is_terminated():
+            self.matcher.fill_next_token_bitmask(self.bitmask)
+            print(self.bitmask)
 
-        Returns:
-            The constrained logits (mx.array)
-        """
-        # Reset the bitmask
-        xgrammar.reset_token_bitmask(self.bitmask)
+        # xgrammar.apply_token_bitmask_inplace(logits, self.bitmask)
 
-        # Convert the tokens to a list
-        token_ids = tokens.tolist()
+        # # Reset the bitmask
+        # xgrammar.reset_token_bitmask(self.bitmask)
 
-        # Check if we need to reset the matcher
-        if len(token_ids) == 1:
-            self.matcher.reset()
+        # # Convert the tokens to a list
+        # token_ids = tokens.tolist()
 
-        # Let's make sure each newly generated token conforms to our grammar
-        for token_id in token_ids:
-            if not self.matcher.accept_token(token_id):
-                # If the token is not accepted, we should reset and try again
-                # This is a fallback that shouldn't normally happen with the bitmask
-                self.matcher.reset()
-                self.matcher.accept_token(token_id)
+        # # Check if we need to reset the matcher
+        # if len(token_ids) == 1:
+        #     self.matcher.reset()
 
-        # Fill the bitmask with valid next tokens according to the grammar
-        self.matcher.fill_next_token_bitmask(self.bitmask)
+        # # Let's make sure each newly generated token conforms to our grammar
+        # for token_id in token_ids:
+        #     if not self.matcher.accept_token(token_id):
+        #         # If the token is not accepted, we should reset and try again
+        #         # This is a fallback that shouldn't normally happen with the bitmask
+        #         self.matcher.reset()
+        #         self.matcher.accept_token(token_id)
 
-        # Convert the bitmask to logits mask where invalid tokens have -inf logits
-        bitmask_mx = mx.array(self.bitmask.view())
+        # # Fill the bitmask with valid next tokens according to the grammar
+        # self.matcher.fill_next_token_bitmask(self.bitmask)
 
-        # Apply the mask to the logits
-        # We achieve this by setting the logits of invalid tokens to -infinity
-        logit_mask = mx.zeros((1, self.vocab_size))
+        # # Convert the bitmask to logits mask where invalid tokens have -inf logits
+        # bitmask_mx = mx.array(self.bitmask.view())
 
-        # For each 32-bit chunk in the bitmask
-        for i in range(self.batch_bitmask_shape[1]):
-            chunk = bitmask_mx[0, i]
-            # Extract each bit from the 32-bit chunk
-            for j in range(32):
-                idx = i * 32 + j
-                if idx < self.vocab_size:
-                    # If bit is 0 (invalid token), set corresponding logit to -inf
-                    if (chunk & (1 << j)) == 0:
-                        logit_mask[0, idx] = float("-inf")
+        # # Apply the mask to the logits
+        # # We achieve this by setting the logits of invalid tokens to -infinity
+        # logit_mask = mx.zeros((1, self.vocab_size))
 
-        # Apply the mask
-        return logits + logit_mask
+        # # For each 32-bit chunk in the bitmask
+        # for i in range(self.batch_bitmask_shape[1]):
+        #     chunk = bitmask_mx[0, i]
+        #     # Extract each bit from the 32-bit chunk
+        #     for j in range(32):
+        #         idx = i * 32 + j
+        #         if idx < self.vocab_size:
+        #             # If bit is 0 (invalid token), set corresponding logit to -inf
+        #             if (chunk & (1 << j)) == 0:
+        #                 logit_mask[0, idx] = float("-inf")
+
+        # # Apply the mask
+        # return logits + logit_mask
+        return logits
 
 
 def parse_args():
@@ -154,23 +143,20 @@ def main():
             [{"role": "user", "content": args.prompt}], add_generation_prompt=True
         ),
         args.max_tokens,
-        # logits_processors=[
-        #     XGrammarLogitsProcessor(
-        #         grammar=xgrammar.GrammarCompiler(
-        #             tokenizer_info=xgrammar.TokenizerInfo.from_huggingface(tokenizer)
-        #         ).compile_builtin_json_grammar()
-        #     )
-        # ],
+        logits_processors=[
+            XGrammarLogitsProcessor(
+                grammar=xgrammar.GrammarCompiler(
+                    tokenizer_info=xgrammar.TokenizerInfo.from_huggingface(tokenizer)
+                ).compile_builtin_json_grammar()
+            )
+        ],
     )
 
-    print("\nGenerated text:")
-    print(generated_text)
-    """
     # Try to parse the JSON to validate it
     try:
         # Extract JSON from the generated text
-        json_start = generated_text.find('{')
-        json_end = generated_text.rfind('}') + 1
+        json_start = generated_text.find("{")
+        json_end = generated_text.rfind("}") + 1
         if json_start >= 0 and json_end > json_start:
             json_text = generated_text[json_start:json_end]
             parsed_json = json.loads(json_text)
@@ -180,7 +166,6 @@ def main():
             print("\nNo valid JSON found in the generated text")
     except json.JSONDecodeError as e:
         print(f"\nError parsing JSON: {e}")
-    """
 
 
 if __name__ == "__main__":
