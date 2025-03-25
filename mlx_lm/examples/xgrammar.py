@@ -12,7 +12,9 @@ import xgrammar
 import torch
 
 
-def apply_token_bitmask_inplace_mlx(bitmask: torch.Tensor, logits: mx.array) -> mx.array:
+def apply_token_bitmask_inplace_mlx(
+    bitmask: torch.Tensor, logits: mx.array
+) -> mx.array:
     """This is an easy mimic of the apply_token_bitmask_inplace function.
 
     Args:
@@ -41,18 +43,22 @@ class XGrammarLogitsProcessor:
     def __init__(
         self,
         grammar: xgrammar.CompiledGrammar,
-        tokenizer: AutoTokenizer,
         max_rollback_tokens: int = 16,
     ):
-        self.matcher = xgrammar.GrammarMatcher(grammar, max_rollback_tokens=max_rollback_tokens)
+        self.matcher = xgrammar.GrammarMatcher(
+            grammar, max_rollback_tokens=max_rollback_tokens
+        )
         self.vocab_size = grammar.tokenizer_info.vocab_size
         self.bitmask = xgrammar.allocate_token_bitmask(1, self.vocab_size)
-        self.tokenizer = tokenizer
 
     def __call__(self, tokens: mx.array, logits: mx.array) -> mx.array:
         assert tokens.size > 0  # In the first call, tokens.size == #tokens in prompt
         last_token = tokens[-1].item()
-        acc = self.matcher.accept_token(last_token) if not self.matcher.is_terminated() else False
+        acc = (
+            self.matcher.accept_token(last_token)
+            if not self.matcher.is_terminated()
+            else False
+        )
         if not acc:
             self.matcher.reset()
             self.matcher.accept_token(last_token)
@@ -90,8 +96,7 @@ def main():
             XGrammarLogitsProcessor(
                 grammar=xgrammar.GrammarCompiler(
                     tokenizer_info=xgrammar.TokenizerInfo.from_huggingface(tokenizer)
-                ).compile_builtin_json_grammar(),
-                tokenizer=tokenizer,
+                ).compile_builtin_json_grammar()
             )
         ],
     )
