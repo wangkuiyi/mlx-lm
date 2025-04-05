@@ -724,6 +724,8 @@ def generate(
             f"{response.generation_tps:.3f} tokens-per-sec"
         )
         print(f"Peak memory: {response.peak_memory:.3f} GB")
+        print("=" * 10)
+        print()
     return text
 
 
